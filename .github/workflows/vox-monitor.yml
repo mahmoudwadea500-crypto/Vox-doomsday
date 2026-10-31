@@ -1,0 +1,60 @@
+name: VOX Avengers Doomsday Monitor
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vox-monitor
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright requests
+          playwright install --with-deps chromium
+
+      - name: Restore previous monitor state
+        run: |
+          mkdir -p state
+          git fetch origin monitor-state || true
+          if git show-ref --verify --quiet refs/remotes/origin/monitor-state; then
+            git show origin/monitor-state:vox_snapshot.json > state/vox_snapshot.json || true
+          fi
+
+      - name: Check VOX showtimes
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TARGET_URL: https://egy.voxcinemas.com/showtimes?c=mall-of-egy&d=20261216
+        run: python monitor_once.py
+
+      - name: Save monitor state
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B monitor-state
+          cp state/vox_snapshot.json vox_snapshot.json
+          git add vox_snapshot.json
+          git diff --cached --quiet || git commit -m "Update VOX monitor snapshot"
+          git push origin monitor-state --force
